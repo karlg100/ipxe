@@ -24,6 +24,14 @@ struct net_protocol;
 struct ll_protocol;
 struct device;
 
+/** Independent reasons for a temporarily blocked link */
+enum netdev_link_block_reason {
+	NETDEV_LINK_BLOCK_EAP,
+	NETDEV_LINK_BLOCK_STP,
+	NETDEV_LINK_BLOCK_LACP,
+	NETDEV_LINK_BLOCK_COUNT
+};
+
 /** Maximum length of a hardware address
  *
  * The longest currently-supported link-layer address is for IPoIB.
@@ -402,6 +410,10 @@ struct net_device {
 	int link_rc;
 	/** Link block timer */
 	struct retry_timer link_block;
+	/** Active link block reasons (one bit per reason) */
+	unsigned int link_blocked;
+	/** Expiry time for each active link block reason */
+	unsigned long link_block_expiry[NETDEV_LINK_BLOCK_COUNT];
 	/** Maximum packet length
 	 *
 	 * This is the maximum packet length (including any link-layer
@@ -652,7 +664,7 @@ netdev_link_ok ( struct net_device *netdev ) {
  */
 static inline __attribute__ (( always_inline )) int
 netdev_link_blocked ( struct net_device *netdev ) {
-	return ( timer_running ( &netdev->link_block ) );
+	return netdev->link_blocked;
 }
 
 /**
@@ -718,8 +730,10 @@ extern void netdev_rx_unfreeze ( struct net_device *netdev );
 extern void netdev_link_err ( struct net_device *netdev, int rc );
 extern void netdev_link_down ( struct net_device *netdev );
 extern void netdev_link_block ( struct net_device *netdev,
-				unsigned long timeout );
-extern void netdev_link_unblock ( struct net_device *netdev );
+			       enum netdev_link_block_reason reason,
+			       unsigned long timeout );
+extern void netdev_link_unblock ( struct net_device *netdev,
+				 enum netdev_link_block_reason reason );
 extern int netdev_tx ( struct net_device *netdev, struct io_buffer *iobuf );
 extern void netdev_tx_defer ( struct net_device *netdev,
 			      struct io_buffer *iobuf );

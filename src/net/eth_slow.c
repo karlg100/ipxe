@@ -178,13 +178,13 @@ static int eth_slow_lacp_rx ( struct io_buffer *iobuf,
 		interval = ( ( lacp->actor.state & LACP_STATE_FAST ) ?
 			     ( ( LACP_INTERVAL_FAST + 1 ) * TICKS_PER_SEC ) :
 			     ( ( LACP_INTERVAL_SLOW + 1 ) * TICKS_PER_SEC ) );
-		netdev_link_block ( netdev, interval );
+		netdev_link_block ( netdev, NETDEV_LINK_BLOCK_LACP, interval );
 	} else {
-		if ( netdev_link_blocked ( netdev ) ) {
+		if ( netdev->link_blocked & ( 1U << NETDEV_LINK_BLOCK_LACP ) ) {
 			DBGC ( netdev, "SLOW %s LACP partner is up\n",
 			       netdev->name );
 		}
-		netdev_link_unblock ( netdev );
+		netdev_link_unblock ( netdev, NETDEV_LINK_BLOCK_LACP );
 	}
 
 	/* Build response */

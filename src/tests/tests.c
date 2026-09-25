@@ -91,6 +91,7 @@ REQUIRE_OBJECT ( efi_siglist_test );
 REQUIRE_OBJECT ( cpio_test );
 REQUIRE_OBJECT ( fdt_test );
 REQUIRE_OBJECT ( ecdsa_test );
+REQUIRE_OBJECT ( linkblock_test );
 REQUIRE_OBJECT ( hkdf_test );
 REQUIRE_OBJECT ( ffdhe_test );
 REQUIRE_OBJECT ( mime_test );

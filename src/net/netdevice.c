@@ -43,6 +43,7 @@ FILE_SECBOOT ( PERMITTED );
 #include <ipxe/fault.h>
 #include <ipxe/vlan.h>
 #include <ipxe/netdevice.h>
+#include <ipxe/timer.h>
 
 /** @file
  *
@@ -207,8 +208,11 @@ void netdev_rx_unfreeze ( struct net_device *netdev ) {
  */
 void netdev_link_err ( struct net_device *netdev, int rc ) {
 
-	/* Stop link block timer */
-	stop_timer ( &netdev->link_block );
+	/* Discard old holds on a link transition, not a repeated notification */
+	if ( rc != netdev->link_rc ) {
+		netdev->link_blocked = 0;
+		stop_timer ( &netdev->link_block );
+	}
 
 	/* Record link state */
 	netdev->link_rc = rc;
@@ -240,32 +244,109 @@ void netdev_link_down ( struct net_device *netdev ) {
 }
 
 /**
- * Mark network device link as being blocked
+ * Name a link block reason (for debugging)
  *
- * @v netdev		Network device
- * @v timeout		Timeout (in ticks)
+ * @v reason		Link block reason
+ * @ret name		Link block reason name
  */
-void netdev_link_block ( struct net_device *netdev, unsigned long timeout ) {
+static const char *
+netdev_link_block_name ( enum netdev_link_block_reason reason ) {
 
-	/* Start link block timer */
-	if ( ! netdev_link_blocked ( netdev ) ) {
-		DBGC ( netdev, "NETDEV %s link blocked for %ld ticks\n",
-		       netdev->name, timeout );
+	switch ( reason ) {
+	case NETDEV_LINK_BLOCK_EAP:	return "EAP";
+	case NETDEV_LINK_BLOCK_STP:	return "STP";
+	case NETDEV_LINK_BLOCK_LACP:	return "LACP";
+	default:			return "<invalid>";
 	}
-	start_timer_fixed ( &netdev->link_block, timeout );
 }
 
 /**
- * Mark network device link as being unblocked
+ * Expire individual link holds and schedule the next expiry
  *
  * @v netdev		Network device
  */
-void netdev_link_unblock ( struct net_device *netdev ) {
+static void netdev_link_block_update ( struct net_device *netdev ) {
+	unsigned long now = currticks();
+	unsigned long timeout = -1UL;
+	unsigned int blocked = netdev->link_blocked;
+	unsigned int reason;
+	unsigned int bit;
+	long remaining;
 
-	/* Stop link block timer */
-	if ( netdev_link_blocked ( netdev ) )
-		DBGC ( netdev, "NETDEV %s link unblocked\n", netdev->name );
-	stop_timer ( &netdev->link_block );
+	for ( reason = 0 ; reason < NETDEV_LINK_BLOCK_COUNT ; reason++ ) {
+		bit = ( 1U << reason );
+		if ( ! ( netdev->link_blocked & bit ) )
+			continue;
+		remaining = ( netdev->link_block_expiry[reason] - now );
+		if ( remaining <= 0 ) {
+			netdev->link_blocked &= ~bit;
+			DBGC ( netdev, "NETDEV %s link block expired for %s "
+			       "(holds %#x)\n", netdev->name,
+			       netdev_link_block_name ( reason ),
+			       netdev->link_blocked );
+		} else if ( ( unsigned long ) remaining < timeout ) {
+			timeout = remaining;
+		}
+	}
+	if ( netdev->link_blocked ) {
+		start_timer_fixed ( &netdev->link_block, timeout );
+	} else {
+		if ( blocked )
+			DBGC ( netdev, "NETDEV %s link unblocked\n",
+			       netdev->name );
+		stop_timer ( &netdev->link_block );
+	}
+}
+
+/**
+ * Mark network device link as being blocked for one reason
+ *
+ * @v netdev		Network device
+ * @v reason		Link block reason
+ * @v timeout		Timeout (in ticks)
+ *
+ * Timeouts must be less than half the unsigned tick counter range.
+ * Refreshing a hold does not affect any other reason's expiry.
+ */
+void netdev_link_block ( struct net_device *netdev,
+			 enum netdev_link_block_reason reason,
+			 unsigned long timeout ) {
+
+	assert ( reason < NETDEV_LINK_BLOCK_COUNT );
+	if ( ! ( netdev->link_blocked & ( 1U << reason ) ) ) {
+		DBGC ( netdev, "NETDEV %s link blocked by %s for %lu ticks\n",
+		       netdev->name, netdev_link_block_name ( reason ), timeout );
+	} else {
+		DBGC2 ( netdev, "NETDEV %s link block refreshed by %s for "
+			"%lu ticks\n", netdev->name,
+			netdev_link_block_name ( reason ), timeout );
+	}
+	netdev->link_blocked |= ( 1U << reason );
+	netdev->link_block_expiry[reason] = ( currticks() + timeout );
+	netdev_link_block_update ( netdev );
+}
+
+/**
+ * Clear one reason for a blocked network device link
+ *
+ * @v netdev		Network device
+ * @v reason		Link block reason
+ */
+void netdev_link_unblock ( struct net_device *netdev,
+			   enum netdev_link_block_reason reason ) {
+
+	assert ( reason < NETDEV_LINK_BLOCK_COUNT );
+	if ( netdev->link_blocked & ( 1U << reason ) ) {
+		DBGC ( netdev, "NETDEV %s link block released by %s "
+		       "(holds %#x)\n", netdev->name,
+		       netdev_link_block_name ( reason ),
+		       ( netdev->link_blocked & ~( 1U << reason ) ) );
+		if ( netdev->link_blocked == ( 1U << reason ) )
+			DBGC ( netdev, "NETDEV %s link unblocked\n",
+			       netdev->name );
+	}
+	netdev->link_blocked &= ~( 1U << reason );
+	netdev_link_block_update ( netdev );
 }
 
 /**
@@ -279,8 +360,8 @@ static void netdev_link_block_expired ( struct retry_timer *timer,
 	struct net_device *netdev =
 		container_of ( timer, struct net_device, link_block );
 
-	/* Assume link is no longer blocked */
-	DBGC ( netdev, "NETDEV %s link block expired\n", netdev->name );
+	/* Expiry of one reason must not clear another reason's hold */
+	netdev_link_block_update ( netdev );
 }
 
 /**
@@ -705,6 +786,7 @@ static void free_netdev ( struct refcnt *refcnt ) {
 		container_of ( refcnt, struct net_device, refcnt );
 
 	assert ( ! timer_running ( &netdev->link_block ) );
+	assert ( ! netdev->link_blocked );
 	netdev_tx_flush ( netdev );
 	netdev_rx_flush ( netdev );
 	clear_settings ( netdev_settings ( netdev ) );
@@ -929,6 +1011,7 @@ void netdev_close ( struct net_device *netdev ) {
 	netdev->op->close ( netdev );
 
 	/* Stop link block timer */
+	netdev->link_blocked = 0;
 	stop_timer ( &netdev->link_block );
 
 	/* Flush TX and RX queues */

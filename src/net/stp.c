@@ -112,19 +112,19 @@ static int stp_rx ( struct io_buffer *iobuf, struct net_device *netdev,
 		       netdev->name, eth_ntoa ( stp->sender.mac ),
 		       ntohs ( stp->port ), stp->flags );
 		hello = ( ntohs ( stp->hello ) * ( TICKS_PER_SEC / 256 ) );
-		netdev_link_block ( netdev, ( hello * 2 ) );
+		netdev_link_block ( netdev, NETDEV_LINK_BLOCK_STP, ( hello * 2 ) );
 		rc = -ENETUNREACH;
 		goto done;
 	}
 
 	/* Success */
-	if ( netdev_link_blocked ( netdev ) ) {
+	if ( netdev->link_blocked & ( 1U << NETDEV_LINK_BLOCK_STP ) ) {
 		DBGC ( netdev, "STP %s %s port %#04x flags %#02x is "
 		       "forwarding\n",
 		       netdev->name, eth_ntoa ( stp->sender.mac ),
 		       ntohs ( stp->port ), stp->flags );
 	}
-	netdev_link_unblock ( netdev );
+	netdev_link_unblock ( netdev, NETDEV_LINK_BLOCK_STP );
 	rc = 0;
 
  done:

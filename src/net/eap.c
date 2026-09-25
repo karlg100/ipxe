@@ -131,7 +131,7 @@ static int eap_rx_identity ( struct eap_supplicant *supplicant,
 	DBGC ( netdev, "EAP %s Request-Identity blocking link\n",
 	       netdev->name );
 	DBGC_HDA ( netdev, 0, req, req_len );
-	netdev_link_block ( netdev, EAP_BLOCK_TIMEOUT );
+	netdev_link_block ( netdev, NETDEV_LINK_BLOCK_EAP, EAP_BLOCK_TIMEOUT );
 
 	/* Mark EAP as in progress */
 	supplicant->flags |= EAP_FL_ONGOING;
@@ -226,7 +226,7 @@ static int eap_rx_success ( struct eap_supplicant *supplicant ) {
 
 	/* Mark link as unblocked */
 	DBGC ( netdev, "EAP %s Success\n", netdev->name );
-	netdev_link_unblock ( netdev );
+	netdev_link_unblock ( netdev, NETDEV_LINK_BLOCK_EAP );
 
 	return 0;
 }
